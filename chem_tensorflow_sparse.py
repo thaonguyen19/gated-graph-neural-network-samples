@@ -234,7 +234,7 @@ class SparseGGNNChemModel(ChemModel):
             processed_graphs.append({"adjacency_lists": adjacency_lists,
                                      "num_incoming_edge_per_type": num_incoming_edge_per_type,
                                      "init": d["node_features"],
-                                     "labels": [d["targets"][task_id][0] for task_id in self.params['task_ids']]})
+                                     "labels": [d["targets"] for task_id in self.params['task_ids']]})
 
         if is_training_data:
             np.random.shuffle(processed_graphs)
@@ -328,7 +328,7 @@ class SparseGGNNChemModel(ChemModel):
                 self.placeholders['initial_node_representation']: np.array(batch_node_features),
                 self.placeholders['num_incoming_edges_per_type']: np.concatenate(batch_num_incoming_edges_per_type, axis=0),
                 self.placeholders['graph_nodes_list']: np.concatenate(batch_graph_nodes_list),
-                self.placeholders['target_values']: np.transpose(batch_target_task_values, axes=[1,0]),
+                self.placeholders['label_values']: np.transpose(batch_target_task_values, axes=[1,0]),
                 self.placeholders['target_mask']: np.transpose(batch_target_task_mask, axes=[1, 0]),
                 self.placeholders['num_graphs']: num_graphs_in_batch,
                 self.placeholders['graph_state_keep_prob']: state_dropout_keep_prob,

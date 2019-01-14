@@ -123,13 +123,24 @@ class ChemModel(object):
     def process_raw_graphs(self, raw_data: Sequence[Any], is_training_data: bool) -> Any:
         raise Exception("Models have to implement process_raw_graphs!")
 
+    def gated_classification(self, last_h, mlp, candidate_mask, num_nodes): #[v x h, 2h x 1, v x 1]
+        ############### check batching
+        c = tf.slice(last_h, [0, 0], [1, -1]) #[1 x h]
+        linear_input = tf.concat([last_h, tf.tile(c, [num_nodes, 1])], axis=-1) #[v x 2h]
+        linear_input_masked = tf.multiply(linear_input, candidate_mask) #[v x 2h]
+        logits = mlp(linear_input_masked) #[v x 1]
+        #############sum up per graph to get [g x 1]
+        return tf.squeeze(logits)
+
     def make_model(self):
-        self.placeholders['target_values'] = tf.placeholder(tf.float32, [len(self.params['task_ids']), None],
-                                                            name='target_values')
-        self.placeholders['target_mask'] = tf.placeholder(tf.float32, [len(self.params['task_ids']), None],
-                                                          name='target_mask')
+        self.placeholders['label_values'] = tf.placeholder(tf.int32, [len(self.params['task_ids']), None],
+                                                            name='label_values')
+        self.placeholders['candidate_mask'] = tf.placeholder(tf.int32, [,],
+                                                          name='candidate_mask')##############
         self.placeholders['num_graphs'] = tf.placeholder(tf.int32, [], name='num_graphs')
         self.placeholders['out_layer_dropout_keep_prob'] = tf.placeholder(tf.float32, [], name='out_layer_dropout_keep_prob')
+        
+        num_nodes = tf.shape(self.placeholders['initial_node_representation'], out_type=tf.int32)[0]
 
         with tf.variable_scope("graph_model"):
             self.prepare_specific_graph_model()
@@ -142,23 +153,16 @@ class ChemModel(object):
         self.ops['losses'] = []
         for (internal_id, task_id) in enumerate(self.params['task_ids']):
             with tf.variable_scope("out_layer_task%i" % task_id):
-                with tf.variable_scope("regression_gate"):
-                    self.weights['regression_gate_task%i' % task_id] = MLP(2 * self.params['hidden_size'], 1, [],
+                with tf.variable_scope("linear_layer"):
+                    self.weights['linear_layer_task%i' % task_id] = MLP(2 * self.params['hidden_size'], 1, [],
                                                                            self.placeholders['out_layer_dropout_keep_prob'])
-                with tf.variable_scope("regression"):
-                    self.weights['regression_transform_task%i' % task_id] = MLP(self.params['hidden_size'], 1, [],
-                                                                                self.placeholders['out_layer_dropout_keep_prob'])
-                computed_values = self.gated_regression(self.ops['final_node_representations'],
-                                                        self.weights['regression_gate_task%i' % task_id],
-                                                        self.weights['regression_transform_task%i' % task_id])
-                diff = computed_values - self.placeholders['target_values'][internal_id,:]
-                task_target_mask = self.placeholders['target_mask'][internal_id,:]
-                task_target_num = tf.reduce_sum(task_target_mask) + SMALL_NUMBER
-                diff = diff * task_target_mask  # Mask out unused values
-                self.ops['accuracy_task%i' % task_id] = tf.reduce_sum(tf.abs(diff)) / task_target_num
-                task_loss = tf.reduce_sum(0.5 * tf.square(diff)) / task_target_num
-                # Normalise loss to account for fewer task-specific examples in batch:
-                task_loss = task_loss * (1.0 / (self.params['task_sample_ratios'].get(task_id) or 1.0))
+                logits = self.gated_classification(self.ops['final_node_representations'],
+                                                   self.weights['linear_layer_task%i' % task_id], self.placeholders['candidate_mask'], num_nodes)
+                # find logits & max id (for loss & acc respectively)
+		task_loss = tf.contrib.kernel_methods.sparse_multiclass_hinge_loss(self.placeholders['label_values'][internal_id,:], logits) #logits: [batch, n_classes) 
+		#https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/kernel_methods/python/losses.py
+		predictions = tf.argmax(logits, 1)
+                self.ops['accuracy_task%i' % task_id] = tf.metrics.accuracy(self.placeholders['label_values'][internal_id,:], predictions)
                 self.ops['losses'].append(task_loss)
         self.ops['loss'] = tf.reduce_sum(self.ops['losses'])
 
