@@ -124,19 +124,17 @@ class ChemModel(object):
         raise Exception("Models have to implement process_raw_graphs!")
 
     def gated_classification(self, last_h, mlp, candidate_mask, num_nodes): #[v x h, 2h x 1, v x 1]
-        ############### check batching
         c = tf.slice(last_h, [0, 0], [1, -1]) #[1 x h]
         linear_input = tf.concat([last_h, tf.tile(c, [num_nodes, 1])], axis=-1) #[v x 2h]
         linear_input_masked = tf.multiply(linear_input, candidate_mask) #[v x 2h]
         logits = mlp(linear_input_masked) #[v x 1]
-        #############sum up per graph to get [g x 1]
+        #############segment operation per graph to get ideally [g x n_classes]
         return tf.squeeze(logits)
 
     def make_model(self):
         self.placeholders['label_values'] = tf.placeholder(tf.int32, [len(self.params['task_ids']), None],
                                                             name='label_values')
-        self.placeholders['candidate_mask'] = tf.placeholder(tf.int32, [,],
-                                                          name='candidate_mask')##############
+        self.placeholders['candidate_mask'] = tf.placeholder(tf.int32, [None,], name='candidate_mask')
         self.placeholders['num_graphs'] = tf.placeholder(tf.int32, [], name='num_graphs')
         self.placeholders['out_layer_dropout_keep_prob'] = tf.placeholder(tf.float32, [], name='out_layer_dropout_keep_prob')
         

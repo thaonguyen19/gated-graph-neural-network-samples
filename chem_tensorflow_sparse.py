@@ -234,7 +234,8 @@ class SparseGGNNChemModel(ChemModel):
             processed_graphs.append({"adjacency_lists": adjacency_lists,
                                      "num_incoming_edge_per_type": num_incoming_edge_per_type,
                                      "init": d["node_features"],
-                                     "labels": [d["targets"] for task_id in self.params['task_ids']]})
+                                     "labels": [d["targets"] for task_id in self.params['task_ids']],
+                                     "candidates": d["candidates"]})
 
         if is_training_data:
             np.random.shuffle(processed_graphs)
@@ -289,6 +290,7 @@ class SparseGGNNChemModel(ChemModel):
             batch_num_incoming_edges_per_type = []
             batch_graph_nodes_list = []
             node_offset = 0
+            batch_candidate_mask = []
 
             while num_graphs < len(data) and node_offset + len(data[num_graphs]['init']) < self.params['batch_size']:
                 cur_graph = data[num_graphs]
@@ -324,6 +326,10 @@ class SparseGGNNChemModel(ChemModel):
                 num_graphs_in_batch += 1
                 node_offset += num_nodes_in_graph
 
+                cur_mask = np.zeros((num_nodes_in_graph,), dtype=np.int32)
+                cur_mask[np.array(cur_graph['candidates'])] = 1
+                batch_candidate_mask.extend(list(cur_mask))
+
             batch_feed_dict = {
                 self.placeholders['initial_node_representation']: np.array(batch_node_features),
                 self.placeholders['num_incoming_edges_per_type']: np.concatenate(batch_num_incoming_edges_per_type, axis=0),
@@ -332,7 +338,8 @@ class SparseGGNNChemModel(ChemModel):
                 self.placeholders['target_mask']: np.transpose(batch_target_task_mask, axes=[1, 0]),
                 self.placeholders['num_graphs']: num_graphs_in_batch,
                 self.placeholders['graph_state_keep_prob']: state_dropout_keep_prob,
-                self.placeholders['edge_weight_dropout_keep_prob']: edge_weights_dropout_keep_prob
+                self.placeholders['edge_weight_dropout_keep_prob']: edge_weights_dropout_keep_prob,
+                self.placeholders['candidate_mask']: np.array(batch_candidate_mask)
             }
 
             # Merge adjacency lists and information about incoming nodes:
