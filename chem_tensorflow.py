@@ -17,7 +17,7 @@ class ChemModel(object):
     @classmethod
     def default_params(cls):
         return {
-            'num_epochs': 3000,
+            'num_epochs': 8,
             'patience': 25,
             'learning_rate': 0.001,
             'clamp_gradient_norm': 1.0,
@@ -27,13 +27,13 @@ class ChemModel(object):
             'num_timesteps': 4,
             'use_graph': True,
 
-            'tie_fwd_bkwd': True,
+            'tie_fwd_bkwd': False,
             'task_ids': [0],
 
             'random_seed': 0,
 
-            'train_file': 'molecules_train.json',
-            'valid_file': 'molecules_valid.json'
+            'train_file': 'iclr_train.json',
+            'valid_file': 'iclr_valid.json'
         }
 
     def __init__(self, args):
@@ -157,11 +157,28 @@ class ChemModel(object):
                 logits = self.gated_classification(self.ops['final_node_representations'],
                                                    self.weights['linear_layer_task%i' % task_id], self.placeholders['candidate_mask'], num_nodes)
                 # find logits & max id (for loss & acc respectively)
-		task_loss = tf.contrib.kernel_methods.sparse_multiclass_hinge_loss(self.placeholders['label_values'][internal_id,:], logits) #logits: [batch, n_classes) 
+                graph_indices = tf.add(self.placeholders['graph_nodes_list'], tf.constant(1))
+                graph_indices_mask = tf.multiply(graph_indices, self.placeholders['candidate_mask'])
+                unique_indices = tf.unique(graph_indices_mask)
+                unique_indices = tf.cast(unique_indices, tf.int32)
+                task_loss, task_acc = [], []
+                for val in unique_indices:
+                    if tf.equal(val, tf.constant(0)):
+                        continue
+                    gather_idx = tf.where(tf.equal(graph_indices_mask, val))
+                    graph_logits = tf.gather(logits, gather_idx)
+                    label = tf.gather(self.placeholders(['label_values'][internal_id,:]), tf.add(val, -1))
+                    loss = tf.contrib.kernel_methods.sparse_multiclass_hinge_loss(label, tf.expand_dims(graph_logits, 0))
+                    task_loss.append(loss)
+                    pred = tf.argmax(graph_logits, 0)
+                    acc = tf.metrics.accuracy(label, pred)
+                    task_acc.append(acc)
+                    
+		#task_loss = tf.contrib.kernel_methods.sparse_multiclass_hinge_loss(self.placeholders['label_values'][internal_id,:], logits) #logits: [batch, n_classes) 
 		#https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/kernel_methods/python/losses.py
-		predictions = tf.argmax(logits, 1)
-                self.ops['accuracy_task%i' % task_id] = tf.metrics.accuracy(self.placeholders['label_values'][internal_id,:], predictions)
-                self.ops['losses'].append(task_loss)
+		#predictions = tf.argmax(logits, 1)
+                self.ops['accuracy_task%i' % task_id] = tf.reduce_sum(task_acc)#tf.metrics.accuracy(self.placeholders['label_values'][internal_id,:], predictions)
+                self.ops['losses'].append(tf.reduce_sum(task_loss))
         self.ops['loss'] = tf.reduce_sum(self.ops['losses'])
 
     def make_train_step(self):
